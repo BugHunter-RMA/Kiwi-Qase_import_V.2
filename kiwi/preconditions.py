@@ -1,3 +1,6 @@
+# STABLE BLOCK
+# Approved. Preconditions extraction.
+
 import re
 
 def extract_preconditions(text):

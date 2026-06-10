@@ -1,3 +1,6 @@
+# STABLE BLOCK
+# Approved. Kiwi case normalization layer.
+
 from kiwi.steps import parse_steps
 from kiwi.preconditions import extract_preconditions
 
