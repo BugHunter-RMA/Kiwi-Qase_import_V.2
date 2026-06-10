@@ -11,6 +11,17 @@ from core.utils import get_runtime_timestamps
 from core.audit_logger import write_audit_log
 from config import SCRIPT_VERSION
 
+FILES_USED = [
+    "main.py",
+    "kiwi/parser.py",
+    "kiwi/steps.py",
+    "kiwi/preconditions.py",
+    "qase/payload.py",
+    "qase/client.py",
+    "core/utils.py",
+    "core/diff.py"
+]
+
 
 def main():
 
