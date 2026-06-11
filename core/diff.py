@@ -13,8 +13,8 @@ def norm_steps(v):
 
     return [
         {
-            "action": s.get("action", "").strip(),
-            "expected_result": s.get("expected_result", "").strip()
+            "action": (s.get("action") or "").strip(),
+            "expected_result": (s.get("expected_result") or "").strip()
         }
         for s in v
     ]
