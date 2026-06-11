@@ -8,6 +8,7 @@ def parse_steps(text):
     - **Ожидаемый результат:** or ОР: markers (bold markdown)
     - Multi-line expected results (preserves line breaks)
     - Trailing bold markers on action lines
+    - Inline image markdown (kept as-is; stripped later by attachments module)
     """
     text = (text or "").replace("\r\n", "\n")
 
@@ -39,7 +40,6 @@ def parse_steps(text):
             )
             if er_match:
                 in_expected = True
-                # Inline expected result on same line as header
                 inline = er_match.group(2)
                 if inline and inline.strip():
                     expected_lines.append(inline.strip())
@@ -50,18 +50,32 @@ def parse_steps(text):
             else:
                 action_lines.append(line)
 
-        # Clean action: remove trailing bold markers, collapse extra spaces
+        # Clean action: remove trailing bold markers
         action = "\n".join(action_lines).strip()
         action = re.sub(r"\*+\s*$", "", action).strip()
         action = re.sub(r" {2,}", " ", action)
 
-        # Preserve line breaks in expected result (do NOT collapse with re.sub)
+        # Preserve line breaks in expected result
         expected = "\n".join(expected_lines).strip()
 
         if action:
-            step = {"action": action}
+            step = {
+                "action": action,
+                "_raw_chunk": chunk,   # kept for attachment extraction
+            }
             if expected:
                 step["expected_result"] = expected
             steps.append(step)
 
     return steps
+
+
+def finalize_steps(steps):
+    """
+    Remove internal _raw_chunk key before sending to Qase API.
+    Call this after attachment migration is complete.
+    """
+    return [
+        {k: v for k, v in s.items() if k != "_raw_chunk"}
+        for s in steps
+    ]
