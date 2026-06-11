@@ -199,4 +199,4 @@ tmp/
 temp/
 
 # IDE workspace state (sometimes missing)
-.vscode/
+.vscode/qase_token.txt
