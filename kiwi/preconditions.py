@@ -17,7 +17,8 @@ def extract_preconditions(text):
         "преусловия",
         "preconditions",
         "precondition",
-        "pre-condition"
+        "pre-condition",
+        "pre-conditions"
     ]
 
     for i, line in enumerate(lines):
