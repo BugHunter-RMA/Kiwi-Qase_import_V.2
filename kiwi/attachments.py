@@ -3,10 +3,11 @@
 # Kiwi images are embedded inline in step text as markdown:
 #   ![filename.png](/uploads/attachments/auth_user/{uid}/filename.png)
 # This module:
-#   1. Detects image refs per step chunk
-#   2. Downloads each image from Kiwi (requires network access to kiwi host)
+#   1. Detects image refs in step text
+#   2. Downloads each image from Kiwi (uploads are publicly accessible)
 #   3. Uploads to Qase as attachment
-#   4. Returns hash list per step for use in payload
+#   4. Strips image markdown from text
+#   5. Returns (clean_text, [hash1, hash2, ...])
 
 import re
 import requests
@@ -24,17 +25,19 @@ def extract_image_urls(text):
 
 def strip_images(text):
     """Remove image markdown from text, return clean string."""
-    return IMAGE_RE.sub("", text or "").strip()
+    cleaned = IMAGE_RE.sub("", text or "")
+    # Clean up any double blank lines left after removal
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
 
 
-def download_image(kiwi_base_url, relative_url, session):
+def download_image(kiwi_base_url, relative_url):
     """
     Download image bytes from Kiwi.
-    kiwi_base_url: e.g. "https://kiwi.takeprofit.team"
-    relative_url:  e.g. "/uploads/attachments/auth_user/5/file.png"
+    Kiwi uploads are publicly accessible — no auth needed.
     """
     url = kiwi_base_url.rstrip("/") + relative_url
-    r = session.get(url, timeout=30)
+    r = requests.get(url, timeout=30)
     r.raise_for_status()
     return r.content, Path(relative_url).name
 
@@ -56,7 +59,7 @@ def upload_to_qase(project_code, filename, file_bytes, qase_headers):
     r.raise_for_status()
     result = r.json()
 
-    # Response: {"status": true, "result": {"hash": "...", ...}}
+    # Response: {"status": true, "result": [{"hash": "...", ...}]}
     attachments = result.get("result", {})
     if isinstance(attachments, list) and attachments:
         return attachments[0].get("hash")
@@ -65,12 +68,13 @@ def upload_to_qase(project_code, filename, file_bytes, qase_headers):
     raise ValueError(f"Unexpected Qase attachment response: {result}")
 
 
-def migrate_step_attachments(step_text, kiwi_base_url, project_code, qase_headers, kiwi_session):
+def migrate_step_attachments(step_text, kiwi_base_url, project_code, qase_headers):
     """
     For a given step text:
     - Find all embedded images
-    - Download from Kiwi
+    - Download from Kiwi (no auth required)
     - Upload to Qase
+    - Strip image markdown from text
     - Return (clean_text, [hash1, hash2, ...])
     """
     images = extract_image_urls(step_text)
@@ -78,12 +82,12 @@ def migrate_step_attachments(step_text, kiwi_base_url, project_code, qase_header
 
     for alt, relative_url in images:
         try:
-            file_bytes, filename = download_image(kiwi_base_url, relative_url, kiwi_session)
+            file_bytes, filename = download_image(kiwi_base_url, relative_url)
             hash_ = upload_to_qase(project_code, filename, file_bytes, qase_headers)
             hashes.append(hash_)
             print(f"    📎 Uploaded: {filename} -> {hash_[:12]}...")
         except Exception as e:
-            print(f"    ⚠️ Failed to migrate attachment {relative_url}: {e}")
+            print(f"    ⚠️  Failed to migrate attachment {relative_url}: {e}")
 
     clean_text = strip_images(step_text)
     return clean_text, hashes
