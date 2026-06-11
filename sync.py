@@ -20,9 +20,10 @@ from pathlib import Path
 
 from config import PROJECT_CODE, KIWI_URL
 from kiwi.parser import parse_kiwi_case
+from kiwi.attachments import strip_images
 from qase.client import get_headers, update_case
 from qase.payload import build_payload
-from core.utils import get_runtime_timestamps, is_valid
+from core.utils import get_runtime_timestamps
 from core.audit_logger import write_audit_log
 
 SYNC_LOG = Path("sync_log.jsonl")
@@ -83,6 +84,17 @@ def fetch_single_qase_case(qase_id):
     return result
 
 
+# ── Clean steps before sending ────────────────────────────────────────
+
+def clean_steps(steps):
+    for s in steps:
+        s.pop("_raw_chunk", None)
+        s["action"] = strip_images(s.get("action", ""))
+        if "expected_result" in s:
+            s["expected_result"] = strip_images(s["expected_result"])
+    return steps
+
+
 # ── Compare: is Qase case "less complete" than Kiwi? ──────────────────
 
 def qase_needs_update(kiwi, qase_case):
@@ -126,7 +138,6 @@ def process_single(qase_id, kiwi_raw):
 
     qase_title = (qase_case.get("title") or "").strip()
 
-    # Find matching Kiwi case by title
     kiwi_match = None
     for raw in kiwi_raw:
         kiwi = parse_kiwi_case(raw)
@@ -149,7 +160,8 @@ def process_single(qase_id, kiwi_raw):
     for r in reasons:
         print(f"   • {r}")
 
-    payload = build_payload(kiwi_match, qase_case, "2", KIWI_URL)
+    kiwi_match["steps"] = clean_steps(kiwi_match["steps"])
+    payload = build_payload(kiwi_match, qase_case, "1", KIWI_URL)
 
     try:
         update_case(qase_id, payload)
@@ -213,7 +225,8 @@ def process_all(kiwi_raw):
         for r in reasons:
             print(f"   • {r}")
 
-        payload = build_payload(kiwi, qase_case, "2", KIWI_URL)
+        kiwi["steps"] = clean_steps(kiwi["steps"])
+        payload = build_payload(kiwi, qase_case, "1", KIWI_URL)
 
         try:
             update_case(qase_id, payload)
