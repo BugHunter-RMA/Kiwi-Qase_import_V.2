@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 from config import SCRIPT_VERSION, KIWI_URL, KIWI_BASE_URL, PROJECT_CODE
+from config import KIWI_USERNAME, KIWI_PASSWORD
 
 from kiwi.parser import parse_kiwi_case
-from kiwi.steps import finalize_steps
 from kiwi.attachments import migrate_step_attachments, extract_image_urls
 
 from qase.client import get_case, update_case, get_headers
@@ -45,9 +45,10 @@ def create_kiwi_session(kiwi_base_url, username, password):
         token = r.json().get("token")
         if token:
             session.headers.update({"Authorization": f"Bearer {token}"})
+        print("  ✅ Kiwi session created")
         return session
     except Exception as e:
-        print(f"⚠️  Kiwi login failed: {e}")
+        print(f"  ⚠️  Kiwi login failed: {e}")
         return session
 
 
@@ -60,13 +61,7 @@ def has_attachments(steps):
 
 
 def migrate_attachments(steps, kiwi_base_url, kiwi_session):
-    """
-    For each step:
-    - Download images from Kiwi
-    - Upload to Qase
-    - Add hashes to step["attachments"]
-    - Strip image markdown from action/expected text
-    """
+    """Download images from Kiwi, upload to Qase, attach hashes to steps."""
     qase_hdrs = get_headers()
 
     for step in steps:
@@ -76,11 +71,10 @@ def migrate_attachments(steps, kiwi_base_url, kiwi_session):
         if not images:
             continue
 
-        print(f"  Step: {step['action'][:50]}...")
+        print(f"  Step: {step['action'][:60]}...")
         _, hashes = migrate_step_attachments(
             raw, kiwi_base_url, PROJECT_CODE, qase_hdrs, kiwi_session
         )
-
         if hashes:
             step["attachments"] = hashes
 
@@ -146,18 +140,23 @@ def main():
         ).strip().lower()
 
         if migrate_att == "y":
-            print("\nВведите данные для подключения к Kiwi:")
-            kiwi_user = input("  Kiwi username: ").strip()
-            kiwi_pass = input("  Kiwi password: ").strip()
+            # Use credentials from .env / config
+            username = KIWI_USERNAME
+            password = KIWI_PASSWORD
+
+            # Fallback: ask interactively if .env not configured
+            if not username:
+                username = input("  Kiwi username: ").strip()
+            if not password:
+                password = input("  Kiwi password: ").strip()
 
             print("\n⬇️  Загружаем скриншоты из Kiwi...\n")
-            kiwi_session = create_kiwi_session(KIWI_BASE_URL, kiwi_user, kiwi_pass)
+            kiwi_session = create_kiwi_session(KIWI_BASE_URL, username, password)
             kiwi["steps"] = migrate_attachments(
                 kiwi["steps"], KIWI_BASE_URL, kiwi_session
             )
             print()
         else:
-            # Strip _raw_chunk without migrating attachments
             for s in kiwi["steps"]:
                 s.pop("_raw_chunk", None)
     else:
@@ -180,15 +179,10 @@ def main():
         print("\n❌ VALIDATION FAILED:")
         for err in validation["errors"]:
             print(" -", err)
-
         write_audit_log({
-            "kiwi_id": kiwi_id,
-            "qase_id": qase_id,
-            "mode": mode,
-            "status": "validation_failed",
-            "errors": validation["errors"],
-            "payload": payload,
-            "files": FILES_USED
+            "kiwi_id": kiwi_id, "qase_id": qase_id, "mode": mode,
+            "status": "validation_failed", "errors": validation["errors"],
+            "payload": payload, "files": FILES_USED
         })
         return
 
@@ -201,15 +195,10 @@ def main():
     print("\nSending...\n")
     result = update_case(qase_id, payload)
 
-    # --- AUDIT LOG ---
     write_audit_log({
-        "kiwi_id": kiwi_id,
-        "qase_id": qase_id,
-        "mode": mode,
-        "status": "success",
-        "payload": payload,
-        "result": result,
-        "files": FILES_USED
+        "kiwi_id": kiwi_id, "qase_id": qase_id, "mode": mode,
+        "status": "success", "payload": payload,
+        "result": result, "files": FILES_USED
     })
 
     print("✅ DONE")
