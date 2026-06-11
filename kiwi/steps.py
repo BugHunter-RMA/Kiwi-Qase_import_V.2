@@ -1,25 +1,32 @@
 import re
 
-
 # ── заголовки секции шагов ──────────────────────────────────────────────
 STEPS_HEADER_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
-    r"(Шаги по воспроизведению|Шаги|Steps to reproduce|Steps)"
+    r"(Шаги по воспроизведению(?: и Ожидаемый [Рр]езультат)?|Шаги воспроизведения|Шаги|Steps to reproduce|Steps)"
     r"\s*(?:\*{1,2})?\s*:?\s*(?:\n|$)",
     re.IGNORECASE
 )
 
-# ── заголовки секции ОР (блочный формат) ───────────────────────────────
+# ── заголовки блочного ОР (отдельная секция) ───────────────────────────
 EXPECTED_BLOCK_HEADER_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
-    r"(Ожидаемые результаты|Ожидаемый результат|Expected results?)"
+    r"(Ожидаемые результаты|Expected results?)"
+    r"\s*(?:\*{1,2})?\s*:?\s*(?:\n|$)",
+    re.IGNORECASE
+)
+
+# ── стоп-секции после шагов ────────────────────────────────────────────
+STOP_SECTION_RE = re.compile(
+    r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
+    r"(Постусловие|Примечания|Тестовые данные|Notes|Post.?condition)"
     r"\s*(?:\*{1,2})?\s*:?\s*(?:\n|$)",
     re.IGNORECASE
 )
 
 # ── инлайн-маркер ОР внутри шага ───────────────────────────────────────
 INLINE_ER_RE = re.compile(
-    r"^\s*\*{0,2}\s*(ОР|Ожидаемый результат)\s*\*{0,2}\s*:?\s*\*{0,2}\s*(.*)?$",
+    r"^\s*\*{0,2}\s*(ОР|Ожидаемый результ[а-я]*)\s*\*{0,2}\s*:?\s*\*{0,2}\s*(.*)?$",
     re.IGNORECASE
 )
 
@@ -28,17 +35,22 @@ STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)\.\s+")
 
 
 def _extract_steps_text(text):
-    """Обрезаем текст до начала секции шагов."""
+    """Обрезаем текст: берём только секцию шагов."""
     m = STEPS_HEADER_RE.search(text)
     if m:
-        return text[m.end():]
+        text = text[m.end():]
+
+    # обрезаем стоп-секции в конце
+    stop = STOP_SECTION_RE.search(text)
+    if stop:
+        text = text[:stop.start()]
+
     return text
 
 
 def _split_steps_and_expected_block(text):
     """
-    Если в тексте есть блочный заголовок ОР — делим на два куска:
-    шаги и ожидаемые результаты.
+    Если есть отдельный блок ОР — делим.
     Возвращает (steps_text, expected_block_text or None)
     """
     m = EXPECTED_BLOCK_HEADER_RE.search(text)
@@ -48,7 +60,7 @@ def _split_steps_and_expected_block(text):
 
 
 def _parse_numbered_items(text):
-    """Парсит нумерованный список в список строк."""
+    """Парсит нумерованный список → список строк."""
     matches = list(STEP_NUM_RE.finditer(text))
     items = []
     for i, m in enumerate(matches):
@@ -67,10 +79,10 @@ def _clean_action(text):
 def parse_steps(text):
     text = (text or "").replace("\r\n", "\n")
 
-    # 1. Обрезаем всё до секции шагов
+    # 1. Обрезаем до секции шагов
     text = _extract_steps_text(text)
 
-    # 2. Проверяем блочный формат (шаги отдельно, ОР отдельно)
+    # 2. Проверяем блочный формат (отдельная секция ОР)
     steps_text, expected_block = _split_steps_and_expected_block(text)
 
     if expected_block is not None:

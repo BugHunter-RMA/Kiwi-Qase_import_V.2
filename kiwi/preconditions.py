@@ -3,8 +3,8 @@
 
 import re
 
-def extract_preconditions(text):
 
+def extract_preconditions(text):
     if not text:
         return ""
 
@@ -14,15 +14,16 @@ def extract_preconditions(text):
 
     headers = [
         "предусловия",
+        "предусловие",
         "преусловия",
         "preconditions",
         "precondition",
         "pre-condition",
-        "pre-conditions"
+        "pre-conditions",
     ]
 
     for i, line in enumerate(lines):
-        normalized = re.sub(r"[*#:\s]", "", line.lower())
+        normalized = re.sub(r"[*#:\s\d]", "", line.lower())
         if normalized in headers:
             start = i + 1
             break
@@ -34,9 +35,15 @@ def extract_preconditions(text):
 
     stop_headers = [
         "шаги",
-        "steps",
+        "шагиповоспроизведению",
+        "шагиповоспроизведениюиожидаемыйрезультат",
+        "шагивоспроизведения",
         "stepstoreproduce",
-        "шагиповоспроизведению"
+        "stepstopreproduce",
+        "steps",
+        "тестовыеданные",
+        "примечания",
+        "notes",
     ]
 
     for i in range(start, len(lines)):
