@@ -4,7 +4,7 @@ import re
 STEPS_HEADER_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
     r"(Шаги по воспроизведению(?: и Ожидаемый [Рр]езультат)?|Шаги воспроизведения|Шаги|Steps to reproduce|Steps)"
-    r"\s*(?:\*{1,2})?\s*:?\s*(?:\n|$)",
+    r"\s*(?:\*{1,2})?\s*:?\s*",
     re.IGNORECASE
 )
 
@@ -37,8 +37,10 @@ STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)\.\s+")
 def _extract_steps_text(text):
     """Обрезаем текст: берём только секцию шагов."""
     m = STEPS_HEADER_RE.search(text)
-    if m:
-        text = text[m.end():]
+    if not m:
+        return ""
+
+    text = text[m.end():]
 
     # обрезаем стоп-секции в конце
     stop = STOP_SECTION_RE.search(text)
@@ -81,6 +83,8 @@ def parse_steps(text):
 
     # 1. Обрезаем до секции шагов
     text = _extract_steps_text(text)
+    if not text:
+        return []
 
     # 2. Проверяем блочный формат (отдельная секция ОР)
     steps_text, expected_block = _split_steps_and_expected_block(text)
