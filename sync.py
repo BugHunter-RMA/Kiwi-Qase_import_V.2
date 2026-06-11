@@ -6,6 +6,8 @@ Logic:
 - Full title match (case-sensitive)
 - Duplicates in Qase → skip and log
 - If Qase has less data → overwrite (except title)
+- If expected_result is null in all Qase steps but Kiwi has ER → rewrite
+- Migrates attachments from Kiwi to Qase
 - Logs all actions to sync_log.jsonl
 
 Flags:
@@ -18,9 +20,9 @@ import argparse
 import requests
 from pathlib import Path
 
-from config import PROJECT_CODE, KIWI_URL
+from config import PROJECT_CODE, KIWI_URL, KIWI_BASE_URL
 from kiwi.parser import parse_kiwi_case
-from kiwi.attachments import strip_images
+from kiwi.attachments import strip_images, extract_image_urls, migrate_step_attachments
 from qase.client import get_headers, update_case
 from qase.payload import build_payload
 from core.utils import get_runtime_timestamps
@@ -84,15 +86,37 @@ def fetch_single_qase_case(qase_id):
     return result
 
 
-# ── Clean steps before sending ────────────────────────────────────────
+# ── Clean and migrate steps ────────────────────────────────────────────
 
-def clean_steps(steps):
+def prepare_steps(steps):
+    """
+    Clean steps:
+    - Migrate attachments from Kiwi to Qase
+    - Strip image markdown from action and expected_result
+    - Remove _raw_chunk
+    """
+    qase_hdrs = get_headers()
+    prepared = []
+
     for s in steps:
-        s.pop("_raw_chunk", None)
+        raw = s.pop("_raw_chunk", "")
+        images = extract_image_urls(raw)
+
+        if images:
+            print(f"  📎 Migrating attachments for step: {s.get('action', '')[:60]}...")
+            _, hashes = migrate_step_attachments(
+                raw, KIWI_BASE_URL, PROJECT_CODE, qase_hdrs
+            )
+            if hashes:
+                s["attachments"] = hashes
+
         s["action"] = strip_images(s.get("action", ""))
         if "expected_result" in s:
             s["expected_result"] = strip_images(s["expected_result"])
-    return steps
+
+        prepared.append(s)
+
+    return prepared
 
 
 # ── Compare: is Qase case "less complete" than Kiwi? ──────────────────
@@ -102,20 +126,40 @@ def qase_needs_update(kiwi, qase_case):
 
     qase_steps = qase_case.get("steps") or []
     kiwi_steps = [s for s in kiwi.get("steps", []) if s.get("action")]
+
+    # Steps count
     if len(kiwi_steps) > len(qase_steps):
         reasons.append(f"steps: Kiwi={len(kiwi_steps)} Qase={len(qase_steps)}")
 
+    # ОР попали в шаги — все expected_result null, но Kiwi имеет ОР
+    qase_all_null_er = all(
+        s.get("expected_result") is None
+        for s in qase_steps
+    ) if qase_steps else False
+
+    kiwi_has_er = any(
+        s.get("expected_result")
+        for s in kiwi_steps
+    )
+
+    if qase_all_null_er and kiwi_has_er:
+        reasons.append("expected_result: ОР попали в шаги Qase, нужна перезапись")
+
+    # Preconditions
     kiwi_pre = (kiwi.get("preconditions") or "").strip()
     qase_pre = (qase_case.get("preconditions") or "").strip()
     if kiwi_pre and not qase_pre:
         reasons.append("preconditions: missing in Qase")
 
+    # Priority
     if kiwi.get("priority", 0) != 0 and qase_case.get("priority", 0) == 0:
         reasons.append("priority: not set in Qase")
 
+    # Behavior
     if kiwi.get("behavior", 0) != 0 and qase_case.get("behavior", 0) == 0:
         reasons.append("behavior: not set in Qase")
 
+    # Type
     if kiwi.get("type", 2) != 1 and qase_case.get("type", 1) == 1:
         reasons.append("type: Other in Qase")
 
@@ -160,7 +204,7 @@ def process_single(qase_id, kiwi_raw):
     for r in reasons:
         print(f"   • {r}")
 
-    kiwi_match["steps"] = clean_steps(kiwi_match["steps"])
+    kiwi_match["steps"] = prepare_steps(kiwi_match["steps"])
     payload = build_payload(kiwi_match, qase_case, "1", KIWI_URL)
 
     try:
@@ -225,7 +269,7 @@ def process_all(kiwi_raw):
         for r in reasons:
             print(f"   • {r}")
 
-        kiwi["steps"] = clean_steps(kiwi["steps"])
+        kiwi["steps"] = prepare_steps(kiwi["steps"])
         payload = build_payload(kiwi, qase_case, "1", KIWI_URL)
 
         try:
