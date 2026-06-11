@@ -7,6 +7,7 @@ Logic:
 - Duplicates in Qase → skip and log
 - If Qase has less data → overwrite (except title)
 - If expected_result is null in all Qase steps but Kiwi has ER → rewrite
+- If only attachments missing → patch only attachments per step
 - Migrates attachments from Kiwi to Qase
 - Logs all actions to sync_log.jsonl
 
@@ -86,7 +87,13 @@ def fetch_single_qase_case(qase_id):
     return result
 
 
-# ── Clean and migrate steps ────────────────────────────────────────────
+# ── Normalize text for comparison ─────────────────────────────────────
+
+def normalize_text(t):
+    return (t or "").strip().lower()
+
+
+# ── Clean and migrate steps (full overwrite) ──────────────────────────
 
 def prepare_steps(steps):
     """
@@ -100,12 +107,14 @@ def prepare_steps(steps):
 
     for s in steps:
         raw = s.pop("_raw_chunk", "")
-        images = extract_image_urls(raw)
+        er = s.get("expected_result", "") or ""
+        full_text = raw + "\n" + er
+        images = extract_image_urls(full_text)
 
         if images:
             print(f"  📎 Migrating attachments for step: {s.get('action', '')[:60]}...")
             _, hashes = migrate_step_attachments(
-                raw, KIWI_BASE_URL, PROJECT_CODE, qase_hdrs
+                full_text, KIWI_BASE_URL, PROJECT_CODE, qase_hdrs
             )
             if hashes:
                 s["attachments"] = hashes
@@ -117,6 +126,89 @@ def prepare_steps(steps):
         prepared.append(s)
 
     return prepared
+
+
+# ── Patch only missing attachments ────────────────────────────────────
+
+def patch_missing_attachments(qase_id, qase_case, kiwi):
+    """
+    Compare Qase steps with Kiwi steps by action + expected_result.
+    If Qase step has no attachments but Kiwi has images — upload and patch.
+    Sends only steps field to Qase API.
+    """
+    qase_steps = qase_case.get("steps") or []
+    kiwi_steps = [s for s in kiwi.get("steps", []) if s.get("action")]
+
+    if not qase_steps or not kiwi_steps:
+        return False
+
+    qase_hdrs = get_headers()
+    updated_steps = []
+    any_patched = False
+
+    for qs in qase_steps:
+        step = {
+            "hash": qs.get("hash"),
+            "action": qs.get("action", ""),
+            "expected_result": qs.get("expected_result") or "",
+            "data": qs.get("data"),
+            "attachments": list(qs.get("attachments") or []),
+        }
+
+        # Already has attachments — skip
+        if step["attachments"]:
+            updated_steps.append(step)
+            continue
+
+        # Find matching Kiwi step by action + expected_result
+        kiwi_match = None
+        for ks in kiwi_steps:
+            action_match = normalize_text(qs.get("action")) == normalize_text(ks.get("action"))
+            er_match = normalize_text(qs.get("expected_result")) == normalize_text(
+                strip_images(ks.get("expected_result", "") or "")
+            )
+            if action_match and er_match:
+                kiwi_match = ks
+                break
+
+        if not kiwi_match:
+            updated_steps.append(step)
+            continue
+
+        # Check for images in Kiwi step raw_chunk or expected_result
+        raw = kiwi_match.get("_raw_chunk", "") or ""
+        er = kiwi_match.get("expected_result", "") or ""
+        full_text = raw + "\n" + er
+        images = extract_image_urls(full_text)
+
+        if not images:
+            updated_steps.append(step)
+            continue
+
+        print(f"  📎 Patching attachments for step: {step['action'][:60]}...")
+        _, hashes = migrate_step_attachments(
+            full_text, KIWI_BASE_URL, PROJECT_CODE, qase_hdrs
+        )
+        if hashes:
+            step["attachments"] = hashes
+            any_patched = True
+            print(f"     ✅ {len(hashes)} attachment(s) added")
+
+        updated_steps.append(step)
+
+    if not any_patched:
+        return False
+
+    r = requests.patch(
+        f"https://api.qase.io/v1/case/{PROJECT_CODE}/{qase_id}",
+        headers=get_headers(),
+        json={"steps": updated_steps, "steps_type": "classic"},
+        timeout=30,
+    )
+    if not r.ok:
+        raise RuntimeError(f"PATCH failed: {r.text}")
+
+    return True
 
 
 # ── Compare: is Qase case "less complete" than Kiwi? ──────────────────
@@ -131,7 +223,7 @@ def qase_needs_update(kiwi, qase_case):
     if len(kiwi_steps) > len(qase_steps):
         reasons.append(f"steps: Kiwi={len(kiwi_steps)} Qase={len(qase_steps)}")
 
-    # ОР попали в шаги — все expected_result null, но Kiwi имеет ОР
+    # ОР попали в шаги
     qase_all_null_er = all(
         s.get("expected_result") is None
         for s in qase_steps
@@ -162,6 +254,22 @@ def qase_needs_update(kiwi, qase_case):
     # Type
     if kiwi.get("type", 2) != 1 and qase_case.get("type", 1) == 1:
         reasons.append("type: Other in Qase")
+
+    # Attachments missing
+    qase_no_attachments = all(
+        not (s.get("attachments") or [])
+        for s in qase_steps
+    ) if qase_steps else False
+
+    kiwi_has_images = any(
+        extract_image_urls(
+            (s.get("_raw_chunk", "") or "") + "\n" + (s.get("expected_result", "") or "")
+        )
+        for s in kiwi_steps
+    )
+
+    if qase_no_attachments and kiwi_has_images:
+        reasons.append("attachments: missing in Qase, present in Kiwi")
 
     return reasons
 
@@ -204,6 +312,23 @@ def process_single(qase_id, kiwi_raw):
     for r in reasons:
         print(f"   • {r}")
 
+    # Only attachments missing — patch instead of full overwrite
+    if reasons == ["attachments: missing in Qase, present in Kiwi"]:
+        print(f"  🔧 Patching attachments only...")
+        try:
+            patched = patch_missing_attachments(qase_id, qase_case, kiwi_match)
+            if patched:
+                print(f"   ✅ Done")
+                log_sync({"status": "attachments_patched", "qase_id": qase_id, "title": qase_title})
+            else:
+                print(f"   ⚠️  No attachments matched")
+                log_sync({"status": "attachments_no_match", "qase_id": qase_id, "title": qase_title})
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+            log_sync({"status": "error", "qase_id": qase_id, "title": qase_title, "error": str(e)})
+        return
+
+    # Full overwrite
     kiwi_match["steps"] = prepare_steps(kiwi_match["steps"])
     payload = build_payload(kiwi_match, qase_case, "1", KIWI_URL)
 
@@ -236,8 +361,9 @@ def process_all(kiwi_raw):
     if qase_duplicates:
         print(f"⚠️  Found {len(qase_duplicates)} duplicate titles in Qase — will skip them\n")
 
-    stats = {"matched": 0, "updated": 0, "skipped_no_match": 0,
-             "skipped_duplicate": 0, "skipped_up_to_date": 0, "errors": 0}
+    stats = {"matched": 0, "updated": 0, "attachments_patched": 0,
+             "skipped_no_match": 0, "skipped_duplicate": 0,
+             "skipped_up_to_date": 0, "errors": 0}
 
     for raw in kiwi_raw:
         kiwi = parse_kiwi_case(raw)
@@ -269,6 +395,29 @@ def process_all(kiwi_raw):
         for r in reasons:
             print(f"   • {r}")
 
+        # Only attachments missing — patch instead of full overwrite
+        if reasons == ["attachments: missing in Qase, present in Kiwi"]:
+            print(f"  🔧 Patching attachments only...")
+            try:
+                patched = patch_missing_attachments(qase_id, qase_case, kiwi)
+                if patched:
+                    stats["attachments_patched"] += 1
+                    print(f"   ✅ Done")
+                    log_sync({"status": "attachments_patched", "title": title,
+                              "kiwi_id": kiwi["id"], "qase_id": qase_id})
+                else:
+                    print(f"   ⚠️  No attachments matched")
+                    log_sync({"status": "attachments_no_match", "title": title,
+                              "kiwi_id": kiwi["id"], "qase_id": qase_id})
+            except Exception as e:
+                stats["errors"] += 1
+                print(f"   ❌ Error: {e}")
+                log_sync({"status": "error", "title": title,
+                          "kiwi_id": kiwi["id"], "qase_id": qase_id, "error": str(e)})
+            time.sleep(0.3)
+            continue
+
+        # Full overwrite
         kiwi["steps"] = prepare_steps(kiwi["steps"])
         payload = build_payload(kiwi, qase_case, "1", KIWI_URL)
 
@@ -290,6 +439,7 @@ def process_all(kiwi_raw):
 
     print(f"\n{'='*50}")
     print(f"✅ Updated:            {stats['updated']}")
+    print(f"📎 Attachments patched:{stats['attachments_patched']}")
     print(f"📋 Matched:            {stats['matched']}")
     print(f"⏭️  Up to date:         {stats['skipped_up_to_date']}")
     print(f"⚠️  Duplicates skipped: {stats['skipped_duplicate']}")
