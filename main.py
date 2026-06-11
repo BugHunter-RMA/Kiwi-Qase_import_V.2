@@ -1,6 +1,3 @@
-# APPROVED
-# Main orchestration layer is now production-safe for migration runs
-
 import json
 from pathlib import Path
 
@@ -63,21 +60,43 @@ def main():
     # --- get qase case ---
     qase = get_case(qase_id)
 
-    # --- preview mode (diff) ---
+    # --- preview diff ---
     preview_payload = build_payload(kiwi, qase, "2", KIWI_URL)
     compare_fields(preview_payload, qase)
 
-    mode = input("\nMode [1/2/3]: ").strip()
+    # --- MODE SELECTION ---
+    print("\nВыберите режим работы миграции:\n")
 
-    confirm = input("Proceed? [y/n]: ").strip().lower()
+    print("  1 - ПОЛНАЯ ПЕРЕЗАПИСЬ (FULL OVERWRITE)")
+    print("      Полностью заменяет тест-кейс в Qase данными из Kiwi.")
+    print("      ⚠️ Старые шаги и описание будут удалены.\n")
+
+    print("  2 - БЕЗОПАСНОЕ ОБНОВЛЕНИЕ (SAFE UPDATE)")
+    print("      Показывает сравнение Kiwi vs Qase перед изменением.")
+    print("      Обновляет только изменённые поля.")
+    print("      ⭐ Рекомендуется.\n")
+
+    print("  3 - ОЧИСТКА (WIPE MODE)")
+    print("      Удаляет шаги и описание, оставляет метаданные.\n")
+
+    mode = input("Введите режим [1/2/3]: ").strip()
+
+    valid_modes = {"1", "2", "3"}
+
+    if mode not in valid_modes:
+        print("❌ Неверный режим. Допустимые значения: 1, 2, 3")
+        return
+
+    # --- CONFIRMATION ---
+    confirm = input("\nProceed? [y/n]: ").strip().lower()
     if confirm != "y":
         print("❌ Aborted by user")
         return
 
-    # --- final payload ---
+    # --- BUILD PAYLOAD ---
     payload = build_payload(kiwi, qase, mode, KIWI_URL)
 
-    # --- validation layer (NEW) ---
+    # --- VALIDATION ---
     validation = validate_payload(payload, mode)
 
     if not validation["ok"]:
@@ -102,12 +121,12 @@ def main():
         for w in validation["warnings"]:
             print(" -", w)
 
-    # --- send to qase ---
+    # --- SEND TO QASE ---
     print("\nSending...\n")
 
     result = update_case(qase_id, payload)
 
-    # --- audit log ---
+    # --- AUDIT LOG ---
     write_audit_log({
         "kiwi_id": kiwi_id,
         "qase_id": qase_id,

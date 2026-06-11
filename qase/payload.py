@@ -1,22 +1,5 @@
-# STABLE BLOCK
-# Approved. Payload builder layer is structurally correct.
-
 from core.utils import is_valid
-
-def build_description(kiwi, kiwi_url):
-
-    parts = [f"Kiwi TC: {kiwi_url}{kiwi['id']}/"]
-
-    if is_valid(kiwi.get("requirement")):
-        parts.append(f"Requirements: {kiwi['requirement'].strip()}")
-
-    if is_valid(kiwi.get("extra_link")):
-        parts.append(f"Reference link: {kiwi['extra_link'].strip()}")
-
-    if is_valid(kiwi.get("notes")):
-        parts.append(f"Notes: {kiwi['notes'].strip()}")
-
-    return "\n".join(parts)
+from qase.payload import PRIORITY_MAP  # если у тебя в этом же файле — не импортируй
 
 
 def build_payload(kiwi, qase, mode, kiwi_url):
@@ -36,6 +19,16 @@ def build_payload(kiwi, qase, mode, kiwi_url):
     if mode != "3":
         payload["preconditions"] = kiwi.get("preconditions", "")
 
-    payload["priority"] = kiwi.get("priority")
+    # =========================
+    # FIX: PRIORITY MAPPING
+    # =========================
+    priority_raw = kiwi.get("priority")
+
+    if isinstance(priority_raw, str):
+        priority = PRIORITY_MAP.get(priority_raw.strip().lower())
+    else:
+        priority = priority_raw
+
+    payload["priority"] = priority
 
     return payload
