@@ -2,6 +2,7 @@
 # No circular imports
 # Safe payload generation
 # API-compatible priority mapping (numeric Kiwi keys)
+# Supports per-step attachments
 
 from core.utils import is_valid
 
@@ -24,12 +25,17 @@ def build_description(kiwi, kiwi_url):
 def build_payload(kiwi, qase, mode, kiwi_url):
     wipe = (mode == "3")
 
+    # Steps: strip internal _raw_chunk, include attachments if present
+    steps = []
+    for s in (kiwi["steps"] if not wipe else []):
+        step = {k: v for k, v in s.items() if k != "_raw_chunk"}
+        steps.append(step)
+
     payload = {
-        "steps": kiwi["steps"] if not wipe else [],
+        "steps": steps,
         "steps_type": "classic",
         "description": "" if wipe else build_description(kiwi, kiwi_url),
         "preconditions": "" if wipe else kiwi.get("preconditions", ""),
-        # priority already mapped to Qase int in kiwi/parser.py
         "priority": kiwi.get("priority", 0),
         "automation": kiwi.get("automation", 0),
         "tags": kiwi.get("tags", []),
