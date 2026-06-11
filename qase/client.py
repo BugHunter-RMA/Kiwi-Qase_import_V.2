@@ -1,6 +1,4 @@
-# APPROVED
-# Clean Qase API client layer (production-safe for migration tool)
-
+import os
 import requests
 from pathlib import Path
 
@@ -8,9 +6,12 @@ from config import PROJECT_CODE
 
 
 def get_headers():
+    qase_token = os.environ.get("QASE_TOKEN", "").strip()
+    if not qase_token:
+        raise ValueError("QASE_TOKEN not found in environment. Please set it in .env file or as an environment variable.")
     return {
         "Content-Type": "application/json",
-        "Token": Path("qase_token.txt").read_text().strip()
+        "Token": qase_token
     }
 
 
