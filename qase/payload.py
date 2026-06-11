@@ -39,6 +39,8 @@ def build_payload(kiwi, qase, mode, kiwi_url):
         "priority": kiwi.get("priority", 0),
         "automation": kiwi.get("automation", 0),
         "tags": kiwi.get("tags", []),
+        "behavior": 0 if wipe else kiwi.get("behavior", 0),
+        "type": 1 if wipe else kiwi.get("type", 2),
     }
 
     if mode == "1":
