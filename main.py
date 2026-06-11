@@ -2,10 +2,9 @@ import json
 from pathlib import Path
 
 from config import SCRIPT_VERSION, KIWI_URL, KIWI_BASE_URL, PROJECT_CODE
-from config import KIWI_USERNAME, KIWI_PASSWORD
 
 from kiwi.parser import parse_kiwi_case
-from kiwi.attachments import migrate_step_attachments, extract_image_urls
+from kiwi.attachments import migrate_step_attachments, extract_image_urls, strip_images
 
 from qase.client import get_case, update_case, get_headers
 from qase.payload import build_payload
@@ -14,8 +13,6 @@ from core.diff import compare_fields
 from core.utils import get_runtime_timestamps
 from core.audit_logger import write_audit_log
 from core.validator import validate_payload
-
-import requests
 
 
 FILES_USED = [
@@ -32,26 +29,6 @@ FILES_USED = [
 ]
 
 
-def create_kiwi_session(kiwi_base_url, username, password):
-    """Create authenticated session to Kiwi for downloading attachments."""
-    session = requests.Session()
-    try:
-        r = session.post(
-            f"{kiwi_base_url}/api/v2/auth/login/",
-            json={"username": username, "password": password},
-            timeout=15
-        )
-        r.raise_for_status()
-        token = r.json().get("token")
-        if token:
-            session.headers.update({"Authorization": f"Bearer {token}"})
-        print("  ✅ Kiwi session created")
-        return session
-    except Exception as e:
-        print(f"  ⚠️  Kiwi login failed: {e}")
-        return session
-
-
 def has_attachments(steps):
     """Check if any step contains embedded images."""
     return any(
@@ -60,8 +37,14 @@ def has_attachments(steps):
     )
 
 
-def migrate_attachments(steps, kiwi_base_url, kiwi_session):
-    """Download images from Kiwi, upload to Qase, attach hashes to steps."""
+def migrate_attachments(steps):
+    """
+    For each step:
+    - Download images from Kiwi (no auth needed)
+    - Upload to Qase
+    - Strip image markdown from action and expected_result
+    - Add attachment hashes to step
+    """
     qase_hdrs = get_headers()
 
     for step in steps:
@@ -72,11 +55,18 @@ def migrate_attachments(steps, kiwi_base_url, kiwi_session):
             continue
 
         print(f"  Step: {step['action'][:60]}...")
+
         _, hashes = migrate_step_attachments(
-            raw, kiwi_base_url, PROJECT_CODE, qase_hdrs, kiwi_session
+            raw, KIWI_BASE_URL, PROJECT_CODE, qase_hdrs
         )
+
         if hashes:
             step["attachments"] = hashes
+
+        # Strip image markdown from action and expected_result
+        step["action"] = strip_images(step.get("action", ""))
+        if "expected_result" in step:
+            step["expected_result"] = strip_images(step["expected_result"])
 
     return steps
 
@@ -140,28 +130,22 @@ def main():
         ).strip().lower()
 
         if migrate_att == "y":
-            # Use credentials from .env / config
-            username = KIWI_USERNAME
-            password = KIWI_PASSWORD
-
-            # Fallback: ask interactively if .env not configured
-            if not username:
-                username = input("  Kiwi username: ").strip()
-            if not password:
-                password = input("  Kiwi password: ").strip()
-
             print("\n⬇️  Загружаем скриншоты из Kiwi...\n")
-            kiwi_session = create_kiwi_session(KIWI_BASE_URL, username, password)
-            kiwi["steps"] = migrate_attachments(
-                kiwi["steps"], KIWI_BASE_URL, kiwi_session
-            )
+            kiwi["steps"] = migrate_attachments(kiwi["steps"])
             print()
         else:
+            # Strip _raw_chunk and image markdown without uploading
             for s in kiwi["steps"]:
                 s.pop("_raw_chunk", None)
+                s["action"] = strip_images(s.get("action", ""))
+                if "expected_result" in s:
+                    s["expected_result"] = strip_images(s["expected_result"])
     else:
         for s in kiwi["steps"]:
             s.pop("_raw_chunk", None)
+            s["action"] = strip_images(s.get("action", ""))
+            if "expected_result" in s:
+                s["expected_result"] = strip_images(s["expected_result"])
 
     # --- CONFIRMATION ---
     confirm = input("Proceed? [y/n]: ").strip().lower()
