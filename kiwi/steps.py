@@ -8,12 +8,18 @@ STEPS_HEADER_RE = re.compile(
     re.IGNORECASE
 )
 
-# ── блочный ОР: отдельная строка + после неё нумерованный список ────────
-# Отличие от inline: нет текста на той же строке после двоеточия
-EXPECTED_BLOCK_HEADER_RE = re.compile(
-    r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
-    r"(Ожидаемый результат|Ожидаемые результаты|Expected results?)"
-    r"\s*(?:\*{1,2})?\s*:?\s*\n",   # строго перенос строки после заголовка
+# ── БЛОЧНЫЙ ОР верхнего уровня: **ОР**: отдельной строкой, затем нумерованный список
+# Формат: **Ожидаемый результат**:\n\n1. ...
+# Без #### — только ** обёртка
+TOP_LEVEL_BLOCK_ER_RE = re.compile(
+    r"(?:^|\n)\s*\*{1,2}\s*Ожидаемый результат\s*\*{0,2}\s*:?\s*\n+",
+    re.IGNORECASE
+)
+
+# ── ОР-заголовок внутри чанка шага: #### **ОР:** (с ####)
+# Формат: \n#### **Ожидаемый результат:**\n
+CHUNK_BLOCK_ER_RE = re.compile(
+    r"(?:^|\n)\s*#{1,4}[^а-яА-Яa-zA-Z\n]*\*{0,2}\s*(ОР|Ожидаемый результ[а-я]*)\s*:?\s*\*{0,2}\s*\n+",
     re.IGNORECASE
 )
 
@@ -31,8 +37,8 @@ INLINE_ER_RE = re.compile(
     re.IGNORECASE
 )
 
-# ── нумерованный шаг ───────────────────────────────────────────────────
-STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)\.\s*(?=\S)")
+# ── нумерованный шаг: "1. " или "1." или "1 " (без точки тоже встречается)
+STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)[.\s]\s*(?=\S)")
 
 
 def _extract_steps_text(text):
@@ -45,21 +51,6 @@ def _extract_steps_text(text):
     if stop:
         text = text[:stop.start()]
     return text
-
-
-def _is_block_format(text):
-    """
-    Блочный формат: заголовок ОР на отдельной строке,
-    после него нумерованный список (1. ...).
-    """
-    m = EXPECTED_BLOCK_HEADER_RE.search(text)
-    if not m:
-        return False, None, None
-    after = text[m.end():]
-    # После заголовка должен идти нумерованный список
-    if STEP_NUM_RE.search(after):
-        return True, text[:m.start()], after
-    return False, None, None
 
 
 def _parse_numbered_items(text):
@@ -87,23 +78,17 @@ def parse_steps(text):
     if not text:
         return []
 
-    # 2. Определяем формат: блочный или попарный
-    is_block, steps_text, expected_block = _is_block_format(text)
-
-    if is_block:
-        # ── БЛОЧНЫЙ ФОРМАТ ──────────────────────────────────────────
-        step_actions = _parse_numbered_items(steps_text)
-        step_expected = _parse_numbered_items(expected_block)
-
+    # 2. Блочный формат верхнего уровня: **ОР**:\n\n1. ...
+    top_block = TOP_LEVEL_BLOCK_ER_RE.search(text)
+    if top_block and STEP_NUM_RE.search(text[top_block.end():]):
+        step_actions = _parse_numbered_items(text[:top_block.start()])
+        step_expected = _parse_numbered_items(text[top_block.end():])
         steps = []
         for i, action in enumerate(step_actions):
             action = _clean_action(action)
             if not action:
                 continue
-            step = {
-                "action": action,
-                "_raw_chunk": action,
-            }
+            step = {"action": action, "_raw_chunk": action}
             if i < len(step_expected):
                 er = step_expected[i].strip()
                 if er:
@@ -111,7 +96,7 @@ def parse_steps(text):
             steps.append(step)
         return steps
 
-    # ── ПОПАРНЫЙ ФОРМАТ (шаг → ОР inline) ───────────────────────────
+    # 3. Попарный формат: шаг за шагом
     matches = list(STEP_NUM_RE.finditer(text))
     steps = []
 
@@ -120,6 +105,19 @@ def parse_steps(text):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[start:end].strip()
 
+        # Проверяем: есть ли #### **ОР:** внутри чанка
+        block_in_chunk = CHUNK_BLOCK_ER_RE.search(chunk)
+        if block_in_chunk:
+            action = _clean_action(chunk[:block_in_chunk.start()])
+            expected = chunk[block_in_chunk.end():].strip()
+            if action:
+                step = {"action": action, "_raw_chunk": chunk}
+                if expected:
+                    step["expected_result"] = expected
+                steps.append(step)
+            continue
+
+        # Попарный inline: построчно
         lines = chunk.splitlines()
         action_lines = []
         expected_lines = []
@@ -133,7 +131,6 @@ def parse_steps(text):
                 if inline and inline.strip():
                     expected_lines.append(inline.strip())
                 continue
-
             if in_expected:
                 expected_lines.append(line)
             else:
@@ -143,10 +140,7 @@ def parse_steps(text):
         expected = "\n".join(expected_lines).strip()
 
         if action:
-            step = {
-                "action": action,
-                "_raw_chunk": chunk,
-            }
+            step = {"action": action, "_raw_chunk": chunk}
             if expected:
                 step["expected_result"] = expected
             steps.append(step)
