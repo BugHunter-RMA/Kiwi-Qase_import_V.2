@@ -8,11 +8,12 @@ STEPS_HEADER_RE = re.compile(
     re.IGNORECASE
 )
 
-# ── заголовки блочного ОР (отдельная секция) ───────────────────────────
+# ── блочный ОР: отдельная строка + после неё нумерованный список ────────
+# Отличие от inline: нет текста на той же строке после двоеточия
 EXPECTED_BLOCK_HEADER_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*{1,2})?\s*"
-    r"(Ожидаемые результаты|Expected results?)"
-    r"\s*(?:\*{1,2})?\s*:?\s*(?:\n|$)",
+    r"(Ожидаемый результат|Ожидаемые результаты|Expected results?)"
+    r"\s*(?:\*{1,2})?\s*:?\s*\n",   # строго перенос строки после заголовка
     re.IGNORECASE
 )
 
@@ -31,7 +32,7 @@ INLINE_ER_RE = re.compile(
 )
 
 # ── нумерованный шаг ───────────────────────────────────────────────────
-STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)\.\s+")
+STEP_NUM_RE = re.compile(r"(?:^|\n)(\d+)\.\s*(?=\S)")
 
 
 def _extract_steps_text(text):
@@ -39,26 +40,26 @@ def _extract_steps_text(text):
     m = STEPS_HEADER_RE.search(text)
     if not m:
         return ""
-
     text = text[m.end():]
-
-    # обрезаем стоп-секции в конце
     stop = STOP_SECTION_RE.search(text)
     if stop:
         text = text[:stop.start()]
-
     return text
 
 
-def _split_steps_and_expected_block(text):
+def _is_block_format(text):
     """
-    Если есть отдельный блок ОР — делим.
-    Возвращает (steps_text, expected_block_text or None)
+    Блочный формат: заголовок ОР на отдельной строке,
+    после него нумерованный список (1. ...).
     """
     m = EXPECTED_BLOCK_HEADER_RE.search(text)
-    if m:
-        return text[:m.start()], text[m.end():]
-    return text, None
+    if not m:
+        return False, None, None
+    after = text[m.end():]
+    # После заголовка должен идти нумерованный список
+    if STEP_NUM_RE.search(after):
+        return True, text[:m.start()], after
+    return False, None, None
 
 
 def _parse_numbered_items(text):
@@ -86,10 +87,10 @@ def parse_steps(text):
     if not text:
         return []
 
-    # 2. Проверяем блочный формат (отдельная секция ОР)
-    steps_text, expected_block = _split_steps_and_expected_block(text)
+    # 2. Определяем формат: блочный или попарный
+    is_block, steps_text, expected_block = _is_block_format(text)
 
-    if expected_block is not None:
+    if is_block:
         # ── БЛОЧНЫЙ ФОРМАТ ──────────────────────────────────────────
         step_actions = _parse_numbered_items(steps_text)
         step_expected = _parse_numbered_items(expected_block)
